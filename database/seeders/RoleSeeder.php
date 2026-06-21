@@ -54,12 +54,14 @@ class RoleSeeder extends Seeder
             'view projects',
             'create projects',
             'update projects',
+            'delete projects',
             'view tasks',
             'create tasks',
             'update tasks',
-            'update any task',
+            'delete tasks',
             'view workspaces',
             'update workspaces',
+            'delete workspaces',
         ]);
 
         // Employee Role - Limited permissions for assigned work

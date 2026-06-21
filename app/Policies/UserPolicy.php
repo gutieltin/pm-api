@@ -7,11 +7,18 @@ use App\Models\User;
 class UserPolicy
 {
     /**
-     * Only administrators may view the user index.
+     * Users can view other users in workspaces they belong to.
+     * Administrators may view all users.
      */
     public function viewAny(User $authenticatedUser): bool
     {
-        return $authenticatedUser->role === 'admin';
+        // Admins can see all users
+        if ($authenticatedUser->role === 'admin') {
+            return true;
+        }
+
+        // Other users can see users in their workspaces
+        return $authenticatedUser->workspaces()->exists();
     }
 
     /**

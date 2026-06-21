@@ -4,7 +4,6 @@ namespace App\Policies;
 
 use App\Models\Project;
 use App\Models\User;
-use Illuminate\Auth\Access\Response;
 
 class ProjectPolicy
 {
@@ -29,7 +28,7 @@ class ProjectPolicy
      */
     public function create(User $user, $workspace): bool
     {
-        return $user->workspaces()->where('workspace_id', $workspace->id)->whereIn('role', ['admin','manager'])->exists();
+        return $user->workspaces()->where('workspace_id', $workspace->id)->whereIn('role', ['admin', 'manager'])->exists();
     }
 
     /**
@@ -40,14 +39,27 @@ class ProjectPolicy
         return $user->role === 'admin' || $user->id === $project->workspace->owner_id;
     }
 
-    
-
     /**
      * Determine whether the user can delete the model.
      */
     public function delete(User $user, Project $project): bool
     {
-    return $user->role === 'admin' || $user->id === $project->workspace->owner_id;
+        // Admin can delete any project
+        if ($user->role === 'admin') {
+            return true;
+        }
+
+        // Workspace owner can delete projects in their workspace
+        if ($user->id === $project->workspace->owner_id) {
+            return true;
+        }
+
+        // Manager can delete projects if they belong to the workspace
+        if ($user->role === 'manager') {
+            return $user->workspaces()->where('workspace_id', $project->workspace_id)->exists();
+        }
+
+        return false;
     }
 
     /**
@@ -63,6 +75,21 @@ class ProjectPolicy
      */
     public function forceDelete(User $user, Project $project): bool
     {
+        // Admin can permanently delete any project
+        if ($user->role === 'admin') {
+            return true;
+        }
+
+        // Workspace owner can permanently delete projects in their workspace
+        if ($user->id === $project->workspace->owner_id) {
+            return true;
+        }
+
+        // Manager can permanently delete projects if they belong to the workspace
+        if ($user->role === 'manager') {
+            return $user->workspaces()->where('workspace_id', $project->workspace_id)->exists();
+        }
+
         return false;
     }
 }

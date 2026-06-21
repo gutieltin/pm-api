@@ -14,6 +14,7 @@
         "laravel/reverb": "^1.0",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^2.10.1",
+        "railsware/mailtrap-php": "*",
         "spatie/laravel-permission": "^7.1"
     },
     "require-dev": {

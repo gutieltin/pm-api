@@ -2,15 +2,20 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\UserCreated;
 use App\Models\User;
 use App\Models\Workspace;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
-use Illuminate\Validation\ValidationException;
-use Illuminate\Validation\Rules\Password;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Password as PasswordFacade;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\ValidationException;
+use App\Mail\ResetPasswordMail;
+
 class AuthController
 {
     // POST /api/register
@@ -22,37 +27,40 @@ class AuthController
             'password' => 'required|string|min:8|confirmed',
             'workspace_name' => 'required|string|max:255',
         ]);
-    $data = DB::transaction(function () use ($validated) {
-        // 1. Create the User
-        $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
-        ]);
+        $data = DB::transaction(function () use ($validated) {
+            // 1. Create the User
+            $user = User::create([
+                'name' => $validated['name'],
+                'email' => $validated['email'],
+                'password' => Hash::make($validated['password']),
+            ]);
 
-        //2. Create a Workspace for the User
-        $workspace = Workspace::create([
-            'name' => $validated['workspace_name'],
-            'slug' => Str::slug($validated['workspace_name']) . '-' . Str::random(5),
-            'owner_id' => $user->id,
-        ]);
+            // 2. Create a Workspace for the User
+            $workspace = Workspace::create([
+                'name' => $validated['workspace_name'],
+                'slug' => Str::slug($validated['workspace_name']).'-'.Str::random(5),
+                'owner_id' => $user->id,
+            ]);
 
-        // 3. Attach the User to the Workspace with 'admin' role
-        $workspace->users()->attach($user->id, ['role' => 'admin']);
+            // 3. Attach the User to the Workspace with 'admin' role
+            $workspace->users()->attach($user->id, ['role' => 'admin']);
 
-        //4. Assign spatie role to the user
-        $user->assignRole('admin');
+            // 4. Assign spatie role to the user
+            $user->assignRole('admin');
 
-        return [
-            'user' => $user,
-            'token' => $user->createToken('default')->plainTextToken
-        ];
-    });
+            // 5. Dispatch event to send welcome email
+            UserCreated::dispatch($user);
+
+            return [
+                'user' => $user,
+                'token' => $user->createToken('default')->plainTextToken,
+            ];
+        });
 
         return response()->json([
             'message' => 'User registered successfully',
             'user' => $data['user'],
-            'token' => $data['token']
+            'token' => $data['token'],
         ], 201);
     }
 
@@ -87,24 +95,17 @@ class AuthController
 
         return response()->json([
             'token' => $token,
-            'user' => $user->load('roles','workspaces'),
-            'must_reset_password'=>(bool)$user->must_reset_password,
+            'user' => $user->load('roles', 'workspaces'),
+            'must_change_password' => (bool) $user->must_reset_password,
         ]);
     }
 
     public function updatePassword(Request $request)
-    {$request->validate([
-        'current_password' => 'required|string',
-        'new_password' => ['required', 'string', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
-    ]);
-    $user = $request->user();
-
-    // 1. Verify the current (temporary) password
-        if (!Hash::check($request->current_password, $user->password)) {
-            return response()->json([
-                'message' => 'The current password you provided is incorrect.'
-            ], 422);
-        }
+    {
+        $request->validate([
+            'password' => ['required', 'string', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
+        ]);
+        $user = $request->user();
 
         // 2. Update the password and clear the reset flag
         $user->update([
@@ -113,11 +114,11 @@ class AuthController
         ]);
 
         return response()->json([
-            'message' => 'Password updated successfully. You now have full access.'
+            'message' => 'Password updated successfully. You now have full access.',
         ]);
     }
 
-        public function logout(Request $request)
+    public function logout(Request $request)
     {
         // Delete the token that was used to make this request
         $request->user()->currentAccessToken()->delete();
@@ -127,30 +128,95 @@ class AuthController
 
     /**
      * GET /api/v1/users
-     * Return every user in the system. Only accessible by administrators.
+     * Return users that the authenticated user can see.
+     * Admins see all users, others see users in their workspaces.
      */
-    public function index()
+    public function index(Request $request)
     {
         Gate::authorize('viewAny', User::class);
 
-        return User::all();
+        $user = $request->user();
+
+        if ($user->role === 'admin') {
+            return User::all();
+        }
+
+        // Return users from workspaces the authenticated user belongs to
+        $workspaceIds = $user->workspaces->pluck('id');
+        $usersInWorkspaces = DB::table('workspace_user')->whereIn('workspace_id', $workspaceIds)->pluck('user_id');
+
+        // Also include workspace owners
+        $workspaceOwnerIds = Workspace::whereIn('id', $workspaceIds)->pluck('owner_id');
+
+        $allUserIds = $usersInWorkspaces->merge($workspaceOwnerIds)->unique();
+
+        return User::whereIn('id', $allUserIds)->get();
     }
 
-    public function destroy(user $user){
+    public function destroy(user $user)
+    {
         Gate::authorize('delete', $user);
 
         if ($user->ownedWorkspaces()->exists()) {
-    return response()->json([
-        'message' => 'Cannot delete this user because they own workspaces. Reassign ownership first.'
-    ], 422);
-}
-    $user->workspaces()->detach();
-    
-    $user->delete();
+            return response()->json([
+                'message' => 'Cannot delete this user because they own workspaces. Reassign ownership first.',
+            ], 422);
+        }
+        $user->workspaces()->detach();
+
+        $user->delete();
+
+        return response()->json([
+            'message' => "User {$user->name} has been deleted and removed from all workspaces.",
+        ], 200);
+
+    }
+    public function forgotPassword(Request $request)
+{
+    $request->validate(['email' => 'required|email']);
+
+    $user = User::where('email', $request->email)->first();
+
+    if (!$user) {
+        // Don't reveal whether the email exists, for security
+        return response()->json([
+            'message' => 'If that email exists, a reset link has been sent.'
+        ]);
+    }
+
+    $token = PasswordFacade::createToken($user);
+
+    $resetUrl = config('app.frontend_url') . '/reset-password?token=' . $token . '&email=' . urlencode($user->email);
+
+    Mail::to($user->email)->send(new ResetPasswordMail($user, $resetUrl));
 
     return response()->json([
-        'message' => "User {$user->name} has been deleted and removed from all workspaces."
-    ], 200); 
-    
+        'message' => 'If that email exists, a reset link has been sent.'
+    ]);
+}
+
+public function resetPassword(Request $request)
+{
+    $request->validate([
+        'token' => 'required',
+        'email' => 'required|email',
+        'password' => ['required', 'string', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
+    ]);
+
+    $status = PasswordFacade::reset(
+        $request->only('email', 'password', 'password_confirmation', 'token'),
+        function ($user, $password) {
+            $user->update([
+                'password' => Hash::make($password),
+                'must_reset_password' => false,
+            ]);
+        }
+    );
+
+    if ($status ===PasswordFacade::PASSWORD_RESET) {
+        return response()->json(['message' => 'Password reset successfully.']);
     }
+
+    return response()->json(['message' => 'This reset link is invalid or has expired.'], 400);
+}
 }

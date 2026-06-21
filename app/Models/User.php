@@ -4,17 +4,16 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use App\Models\Workspace;   
 
 class User extends Authenticatable
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasFactory, Notifiable, HasApiTokens, HasRoles;
+    use HasApiTokens, HasFactory, HasRoles, Notifiable;
 
     /**
      * The attributes that are mass assignable.
@@ -25,6 +24,8 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'role',
+        'must_reset_password',
     ];
 
     /**
@@ -56,21 +57,21 @@ class User extends Authenticatable
     }
 
     /**
- * Check if the user is an administrator.
- */
-public function isAdmin(): bool
-{
-    // Check if your database column is 'role' or 'is_admin'
-    // I'm assuming 'admin' is the value in a 'role' column.
-    return $this->role === 'admin'; 
-}
+     * Check if the user is an administrator.
+     */
+    public function isAdmin(): bool
+    {
+        // Check if your database column is 'role' or 'is_admin'
+        // I'm assuming 'admin' is the value in a 'role' column.
+        return $this->role === 'admin';
+    }
 
-/**
- * Get the workspaces owned by the user.
- */
-public function ownedWorkspaces(): HasMany
-{
-    // This assumes your workspaces table has an 'owner_id' column
-    return $this->hasMany(Workspace::class, 'owner_id');
-}
+    /**
+     * Get the workspaces owned by the user.
+     */
+    public function ownedWorkspaces(): HasMany
+    {
+        // This assumes your workspaces table has an 'owner_id' column
+        return $this->hasMany(Workspace::class, 'owner_id');
+    }
 }

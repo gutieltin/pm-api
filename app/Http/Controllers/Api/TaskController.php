@@ -2,24 +2,43 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\TaskCreated;
+use App\Events\TaskUpdated;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\TaskResource;
 use App\Models\Project;
 use App\Models\Task;
-use App\Events\TaskCreated;
-use App\Events\TaskUpdated;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Gate;
+use App\Mail\TaskAssignedMail;
+use App\Mail\TaskStatusChangedMail;
+use Illuminate\Support\Facades\Mail;
 
 class TaskController extends Controller
 {
-
-    public function index(Project $project)
+public function index(Request $request, Project $project)
 {
-    $tasks = $project->tasks()->with(['assignee', 'creator'])->paginate(20);
+    $user = $request->user();
+
+    // Start the query and eager load relationships
+    $query = $project->tasks()->with(['assignee', 'creator']);
+
+    // Determine if the user is an admin or the workspace owner
+    $isAdmin = $user->hasRole('admin') || 
+        $user->role === 'admin' || 
+        $user->id === $project->workspace->owner_id;
+
+    // If they are a standard employee, only fetch tasks assigned to them
+    if (! $isAdmin) {
+        $query->where('assignee_id', $user->id);
+    }
+
+    $tasks = $query->paginate(20);
+
     return TaskResource::collection($tasks);
 }
+
     /**
      * Create and Assign Task (Admin/Manager Only).
      */
@@ -37,17 +56,28 @@ class TaskController extends Controller
 
         $task = $project->tasks()->create([
             'title' => $validated['title'],
-            'description' => $request['description']?? null,
+            'description' => $request['description'] ?? null,
             'creator_id' => Auth::id(),
             'assignee_id' => $validated['assignee_id'],
             'priority' => $validated['priority'],
             'status' => 'pending',
-            'due_at' => $validated['due_at']?? null,
+            'due_at' => $validated['due_at'] ?? null,
         ]);
-    
+
         TaskCreated::dispatch($task);
+        if ($task->assignee_id) {
+    $assignee = \App\Models\User::find($task->assignee_id);
+    if ($assignee) {
+        Mail::to($assignee->email)->send(new TaskAssignedMail(
+            assignee: $assignee,
+            task: $task->load('project'),
+        ));
+    }
+}
 
         return new TaskResource($task);
+        // Send email if task has an assignee
+
     }
 
     /**
@@ -55,7 +85,7 @@ class TaskController extends Controller
      */
     public function update(Request $request, Task $task)
     {
-        // Policy will check: 
+        // Policy will check:
         // 1. If Admin: Can change everything.
         // 2. If Assignee: Can ONLY change 'status'.
         Gate::authorize('update', $task);
@@ -67,96 +97,153 @@ class TaskController extends Controller
             // Admins can change everything
             $validated = $request->validate([
                 'title' => 'sometimes|string',
-                'status' => 'sometimes|in:todo,in_progress,review,done',
+                'status' => 'sometimes|in:todo,pending,in_progress,review,done',
+                'current_status' => 'sometimes|in:todo,pending,in_progress,review,done',
                 'assignee_id' => 'sometimes|exists:users,id',
                 'priority' => 'sometimes|in:low,medium,high',
             ]);
+
+            // Handle both status and current_status fields
+            if (isset($validated['current_status'])) {
+                $validated['status'] = $validated['current_status'];
+                unset($validated['current_status']);
+            }
         } else {
             // Employees (Assignees) can ONLY change the status
             $validated = $request->validate([
-                'status' => 'required|in:pending,in_progress,review,done',
+                'status' => 'sometimes|in:todo,pending,in_progress,review,done',
+                'current_status' => 'sometimes|in:todo,pending,in_progress,review,done',
             ]);
+
+            // Require at least one status field
+            if (! isset($validated['status']) && ! isset($validated['current_status'])) {
+                return response()->json([
+                    'message' => 'The status field is required.',
+                    'errors' => ['status' => 'The status field is required.'],
+                ], 422);
+            }
+
+            // Map current_status to status for database
+            if (isset($validated['current_status'])) {
+                $validated['status'] = $validated['current_status'];
+                unset($validated['current_status']);
+            }
+
+            // Only extract status field, ignore any other fields sent by the frontend
+            $validated = ['status' => $validated['status']];
         }
 
         $task->update($validated);
-        
+
         TaskUpdated::dispatch($task->refresh());
+                // Send email if status changed
+        $oldStatus = $task->current_status;
+
+$task->update($validated);
+
+// Send status change email if status changed and task has assignee
+if (
+    isset($validated['current_status']) &&
+    $oldStatus !== $validated['current_status'] &&
+    $task->assignee_id
+) {
+    $assignee = \App\Models\User::find($task->assignee_id);
+    if ($assignee) {
+        Mail::to($assignee->email)->send(new TaskStatusChangedMail(
+            assignee: $assignee,
+            task: $task->load('project'),
+            oldStatus: $oldStatus,
+            newStatus: $validated['current_status'],
+        ));
+    }
+}
 
         return new TaskResource($task);
+
     }
 
     public function destroy(Task $task)
-{
-    // 1. Checks TaskPolicy@delete
-    // If the user isn't an Admin or Workspace Owner, Laravel throws a 403 Forbidden automatically
-    Gate::authorize('delete', $task);
+    {
+        // 1. Checks TaskPolicy@delete
+        // If the user isn't an Admin or Workspace Owner, Laravel throws a 403 Forbidden automatically
+        Gate::authorize('delete', $task);
 
-    // 2. Perform the deletion
-    $task->delete();
+        // 2. Perform the deletion
+        $task->delete();
 
-    // 3. Return a professional corporate response
-    return response()->json([
-        'message' => 'Task has been archived successfully.' 
-    ], 200);
-}
-
-        public function trashed()
-{
-    // Check if user is Admin
-    if (auth()->user()->role !== 'admin') {
-        return response()->json(['message' => 'Unauthorized'], 403);
+        // 3. Return a professional corporate response
+        return response()->json([
+            'message' => 'Task has been archived successfully.',
+        ], 200);
     }
 
-    // onlyTrashed() filters the query to only show deleted items
-    $tasks = Task::onlyTrashed()->with(['project', 'assignee'])->get();
+    public function trashed()
+    {
+        $user = auth()->user();
+        // Check if user is Admin or Manager
+        if (! in_array(auth()->user()->role, ['admin', 'manager'])) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
 
-    return TaskResource::collection($tasks);
-}
+        if ($user->role === 'admin') {
+            $tasks = Task::onlyTrashed()->get();
+        } else {
+            // Get tasks only from projects in the manager's workspaces
+            $workspaceIds = $user->workspaces()->pluck('workspaces.id');
+            $tasks = Task::onlyTrashed()
+                ->whereHas('project.workspace', function ($q) use ($workspaceIds) {
+                    $q->whereIn('id', $workspaceIds);
+                })
+                ->get();
+        }
 
-public function restore($id)
-{
-    if (auth()->user()->role !== 'admin') {
-        return response()->json(['message' => 'Unauthorized'], 403);
+        return TaskResource::collection($tasks);
     }
 
-    // We search through the trashed items specifically
-    $task = Task::onlyTrashed()->findOrFail($id);
-    $task->restore();
+    public function restore($id)
+    {
+        if (! in_array(auth()->user()->role, ['admin', 'manager'])) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
 
-    return response()->json([
-        'message' => 'Task restored successfully.',
-        'task' => new TaskResource($task)
-    ]);
-}
+        // We search through the trashed items specifically
+        $task = Task::onlyTrashed()->findOrFail($id);
+        $task->restore();
 
-// TaskController.php
-
-public function forceDelete($id)
-{
-    // 1. Double-check Admin status
-    if (auth()->user()->role !== 'admin') {
-        return response()->json(['message' => 'Only high-level admins can permanently erase data.'], 403);
+        return response()->json([
+            'message' => 'Task restored successfully.',
+            'task' => new TaskResource($task),
+        ]);
     }
 
-    // 2. Find the task even if it is currently in the Trash
-    $task = Task::withTrashed()->findOrFail($id);
+    // TaskController.php
 
-    // 3. Wipe it from the database forever
-    $task->forceDelete();
+    public function forceDelete($id)
+    {
+        // 1. Double-check Admin status
+        if (! in_array(auth()->user()->role, ['admin', 'manager'])) {
+            return response()->json(['message' => 'Only high-level admins can permanently erase data.'], 403);
+        }
 
-    return response()->json([
-        'message' => 'Task has been permanently erased from the system.'
-    ], 200);
-}
+        // 2. Find the task even if it is currently in the Trash
+        $task = Task::withTrashed()->findOrFail($id);
 
-public function show(Task $task)
-{
-    // 1. Authorize (Ensure user has permission to view this task)
-    Gate::authorize('view', $task);
-    
-    $task->load(['project', 'creator', 'assignee']);
+        // 3. Wipe it from the database forever
+        $task->forceDelete();
 
-    // 3. Return via Resource
-    return new TaskResource($task);
-}
+        return response()->json([
+            'message' => 'Task has been permanently erased from the system.',
+        ], 200);
+    }
+
+    public function show(Task $task)
+    {
+        // 1. Authorize (Ensure user has permission to view this task)
+        Gate::authorize('view', $task);
+
+        $task->load(['project', 'creator', 'assignee']);
+
+        // 3. Return via Resource
+        return new TaskResource($task);
+    }
 }
