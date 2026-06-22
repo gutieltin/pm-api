@@ -1,4 +1,5 @@
-FROM richarvey/nginx-php-fpm:php8.3
+FROM richarvey/nginx-php-fpm:latest
+
 COPY . .
 
 # Allow composer to run as root

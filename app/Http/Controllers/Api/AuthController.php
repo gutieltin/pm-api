@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password as PasswordFacade;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
@@ -27,6 +28,7 @@ class AuthController
             'password' => 'required|string|min:8|confirmed',
             'workspace_name' => 'required|string|max:255',
         ]);
+        
         $data = DB::transaction(function () use ($validated) {
             // 1. Create the User
             $user = User::create([
@@ -107,7 +109,7 @@ class AuthController
         ]);
         $user = $request->user();
 
-        // 2. Update the password and clear the reset flag
+        // Update the password and clear the reset flag
         $user->update([
             'password' => Hash::make($request->password),
             'must_reset_password' => false,
@@ -153,7 +155,8 @@ class AuthController
         return User::whereIn('id', $allUserIds)->get();
     }
 
-    public function destroy(user $user)
+    // FIX 1: Capitalized 'User' to prevent binding crashes
+    public function destroy(User $user) 
     {
         Gate::authorize('delete', $user);
 
@@ -169,54 +172,63 @@ class AuthController
         return response()->json([
             'message' => "User {$user->name} has been deleted and removed from all workspaces.",
         ], 200);
-
     }
+
     public function forgotPassword(Request $request)
-{
-    $request->validate(['email' => 'required|email']);
+    {
+        $request->validate(['email' => 'required|email']);
 
-    $user = User::where('email', $request->email)->first();
+        $user = User::where('email', $request->email)->first();
 
-    if (!$user) {
-        // Don't reveal whether the email exists, for security
+        if (!$user) {
+            // Don't reveal whether the email exists, for security
+            return response()->json([
+                'message' => 'If that email exists, a reset link has been sent.'
+            ]);
+        }
+
+        // FIX 2: Correctly access the broker to create the token
+        $token = PasswordFacade::broker()->createToken($user);
+
+        // FIX 3: Pull directly from the env file with a fallback
+        $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+        $resetUrl = $frontendUrl . '/password-reset?token=' . $token . '&email=' . urlencode($user->email);
+
+        // FIX 4: Wrap the Mailer in a try...catch to handle Mailtrap rate limits safely
+        try {
+            Mail::to($user->email)->send(new ResetPasswordMail($user, $resetUrl));
+        } catch (\Exception $e) {
+            Log::error('Password Reset Mail Error: ' . $e->getMessage());
+        }
+
         return response()->json([
             'message' => 'If that email exists, a reset link has been sent.'
         ]);
     }
 
-    $token = PasswordFacade::createToken($user);
+    public function resetPassword(Request $request)
+    {
+        $request->validate([
+            'token' => 'required',
+            'email' => 'required|email',
+            'password' => ['required', 'string', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
+        ]);
 
-    $resetUrl = config('app.frontend_url') . '/reset-password?token=' . $token . '&email=' . urlencode($user->email);
+        $status = PasswordFacade::reset(
+            $request->only('email', 'password', 'password_confirmation', 'token'),
+            function ($user, $password) {
+                $user->update([
+                    'password' => Hash::make($password),
+                    'must_reset_password' => false,
+                ]);
+            }
+        );
 
-    Mail::to($user->email)->send(new ResetPasswordMail($user, $resetUrl));
-
-    return response()->json([
-        'message' => 'If that email exists, a reset link has been sent.'
-    ]);
-}
-
-public function resetPassword(Request $request)
-{
-    $request->validate([
-        'token' => 'required',
-        'email' => 'required|email',
-        'password' => ['required', 'string', Password::min(8)->mixedCase()->numbers()->symbols(), 'confirmed'],
-    ]);
-
-    $status = PasswordFacade::reset(
-        $request->only('email', 'password', 'password_confirmation', 'token'),
-        function ($user, $password) {
-            $user->update([
-                'password' => Hash::make($password),
-                'must_reset_password' => false,
-            ]);
+        // FIX 5: Syntax spacing
+        if ($status === PasswordFacade::PASSWORD_RESET) {
+            return response()->json(['message' => 'Password reset successfully.']);
         }
-    );
 
-    if ($status ===PasswordFacade::PASSWORD_RESET) {
-        return response()->json(['message' => 'Password reset successfully.']);
+        return response()->json(['message' => 'This reset link is invalid or has expired.'], 400);
     }
-
-    return response()->json(['message' => 'This reset link is invalid or has expired.'], 400);
-}
 }
