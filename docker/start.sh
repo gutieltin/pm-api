@@ -1,25 +1,16 @@
 #!/bin/bash
 
-# Parse DATABASE_URL into individual components
-# Format: postgresql://user:password@host:port/dbname
+# Parse DATABASE_URL using Python (much more reliable)
 if [ -n "$DATABASE_URL" ]; then
-    # Remove the protocol prefix
-    WITHOUT_PROTO=$(echo $DATABASE_URL | sed 's/postgresql:\/\///')
-    
-    # Extract user
-    DB_USER=$(echo $WITHOUT_PROTO | cut -d':' -f1)
-    
-    # Extract password (between first : and @)
-    DB_PASS=$(echo $WITHOUT_PROTO | sed 's/[^:]*:\([^@]*\)@.*/\1/')
-    
-    # Extract host (between @ and :port)
-    DB_HOST=$(echo $WITHOUT_PROTO | sed 's/.*@\([^:]*\):.*/\1/')
-    
-    # Extract port (between : and /)
-    DB_PORT=$(echo $WITHOUT_PROTO | sed 's/.*:\([0-9]*\)\/.*/\1/')
-    
-    # Extract database name (after last /)
-    DB_NAME=$(echo $WITHOUT_PROTO | sed 's/.*\/\(.*\)/\1/')
+    eval $(python3 -c "
+import urllib.parse
+url = urllib.parse.urlparse('$DATABASE_URL')
+print('DB_USER=' + url.username)
+print('DB_PASS=' + url.password)
+print('DB_HOST=' + url.hostname)
+print('DB_PORT=' + str(url.port or 5432))
+print('DB_NAME=' + url.path.lstrip('/'))
+")
 fi
 
 echo "Database config: host=${DB_HOST} port=${DB_PORT} db=${DB_NAME} user=${DB_USER}"
@@ -56,4 +47,15 @@ SESSION_DRIVER=file
 CACHE_STORE=file
 EOF
 
-# Run
+# Run migrations
+php /var/www/html/artisan migrate --force
+
+# Cache config and routes
+php /var/www/html/artisan config:cache
+php /var/www/html/artisan route:cache
+
+# Start php-fpm in background
+php-fpm -D
+
+# Start nginx in foreground
+nginx -g "daemon off;"
