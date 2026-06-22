@@ -1,16 +1,34 @@
 #!/bin/bash
 
-# Parse DATABASE_URL using Python (much more reliable)
+# Parse DATABASE_URL using bash string manipulation
+# Format: postgresql://user:password@host:port/dbname
 if [ -n "$DATABASE_URL" ]; then
-    eval $(python3 -c "
-import urllib.parse
-url = urllib.parse.urlparse('$DATABASE_URL')
-print('DB_USER=' + url.username)
-print('DB_PASS=' + url.password)
-print('DB_HOST=' + url.hostname)
-print('DB_PORT=' + str(url.port or 5432))
-print('DB_NAME=' + url.path.lstrip('/'))
-")
+    # Remove postgresql:// prefix
+    TEMP="${DATABASE_URL#postgresql://}"
+    
+    # Extract user (before first :)
+    DB_USER="${TEMP%%:*}"
+    
+    # Remove user: from start
+    TEMP="${TEMP#*:}"
+    
+    # Extract password (before @)
+    DB_PASS="${TEMP%%@*}"
+    
+    # Remove password@ from start
+    TEMP="${TEMP#*@}"
+    
+    # Extract host (before :)
+    DB_HOST="${TEMP%%:*}"
+    
+    # Remove host: from start
+    TEMP="${TEMP#*:}"
+    
+    # Extract port (before /)
+    DB_PORT="${TEMP%%/*}"
+    
+    # Extract database (after /)
+    DB_NAME="${TEMP#*/}"
 fi
 
 echo "Database config: host=${DB_HOST} port=${DB_PORT} db=${DB_NAME} user=${DB_USER}"
