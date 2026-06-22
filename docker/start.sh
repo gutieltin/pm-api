@@ -1,39 +1,6 @@
 #!/bin/bash
 
-# Parse DATABASE_URL using bash string manipulation
-# Format: postgresql://user:password@host:port/dbname
-if [ -n "$DATABASE_URL" ]; then
-    # Remove postgresql:// prefix
-    TEMP="${DATABASE_URL#postgresql://}"
-    
-    # Extract user (before first :)
-    DB_USER="${TEMP%%:*}"
-    
-    # Remove user: from start
-    TEMP="${TEMP#*:}"
-    
-    # Extract password (before @)
-    DB_PASS="${TEMP%%@*}"
-    
-    # Remove password@ from start
-    TEMP="${TEMP#*@}"
-    
-    # Extract host (before :)
-    DB_HOST="${TEMP%%:*}"
-    
-    # Remove host: from start
-    TEMP="${TEMP#*:}"
-    
-    # Extract port (before /)
-    DB_PORT="${TEMP%%/*}"
-    
-    # Extract database (after /)
-    DB_NAME="${TEMP#*/}"
-fi
-
-echo "Database config: host=${DB_HOST} port=${DB_PORT} db=${DB_NAME} user=${DB_USER}"
-
-# Create .env file
+# Create .env file from Render environment variables
 cat > /var/www/html/.env << EOF
 APP_NAME=ProjectFlow
 APP_ENV=${APP_ENV:-production}
@@ -47,9 +14,9 @@ LOG_CHANNEL=stderr
 DB_CONNECTION=pgsql
 DB_HOST=${DB_HOST}
 DB_PORT=${DB_PORT:-5432}
-DB_DATABASE=${DB_NAME}
-DB_USERNAME=${DB_USER}
-DB_PASSWORD=${DB_PASS}
+DB_DATABASE=${DB_DATABASE}
+DB_USERNAME=${DB_USERNAME}
+DB_PASSWORD=${DB_PASSWORD}
 
 MAIL_MAILER=${MAIL_MAILER:-smtp}
 MAIL_HOST=${MAIL_HOST}
@@ -64,6 +31,8 @@ QUEUE_CONNECTION=sync
 SESSION_DRIVER=file
 CACHE_STORE=file
 EOF
+
+echo "DB config: host=${DB_HOST} port=${DB_PORT} db=${DB_DATABASE}"
 
 # Run migrations
 php /var/www/html/artisan migrate --force
