@@ -1,14 +1,28 @@
 #!/bin/bash
 
-# Parse DATABASE_URL into individual components for Laravel
+# Parse DATABASE_URL into individual components
+# Format: postgresql://user:password@host:port/dbname
 if [ -n "$DATABASE_URL" ]; then
-    # Extract components from postgresql://user:password@host:port/dbname
-    DB_USER=$(echo $DATABASE_URL | sed 's/.*:\/\/\([^:]*\):.*/\1/')
-    DB_PASS=$(echo $DATABASE_URL | sed 's/.*:\/\/[^:]*:\([^@]*\)@.*/\1/')
-    DB_HOST=$(echo $DATABASE_URL | sed 's/.*@\([^:\/]*\).*/\1/')
-    DB_PORT=$(echo $DATABASE_URL | sed 's/.*:\([0-9]*\)\/.*/\1/')
-    DB_NAME=$(echo $DATABASE_URL | sed 's/.*\/\([^?]*\).*/\1/')
+    # Remove the protocol prefix
+    WITHOUT_PROTO=$(echo $DATABASE_URL | sed 's/postgresql:\/\///')
+    
+    # Extract user
+    DB_USER=$(echo $WITHOUT_PROTO | cut -d':' -f1)
+    
+    # Extract password (between first : and @)
+    DB_PASS=$(echo $WITHOUT_PROTO | sed 's/[^:]*:\([^@]*\)@.*/\1/')
+    
+    # Extract host (between @ and :port)
+    DB_HOST=$(echo $WITHOUT_PROTO | sed 's/.*@\([^:]*\):.*/\1/')
+    
+    # Extract port (between : and /)
+    DB_PORT=$(echo $WITHOUT_PROTO | sed 's/.*:\([0-9]*\)\/.*/\1/')
+    
+    # Extract database name (after last /)
+    DB_NAME=$(echo $WITHOUT_PROTO | sed 's/.*\/\(.*\)/\1/')
 fi
+
+echo "Database config: host=${DB_HOST} port=${DB_PORT} db=${DB_NAME} user=${DB_USER}"
 
 # Create .env file
 cat > /var/www/html/.env << EOF
@@ -42,17 +56,4 @@ SESSION_DRIVER=file
 CACHE_STORE=file
 EOF
 
-echo "Database config: host=${DB_HOST} port=${DB_PORT} db=${DB_NAME} user=${DB_USER}"
-
-# Run migrations
-php /var/www/html/artisan migrate --force
-
-# Cache config and routes
-php /var/www/html/artisan config:cache
-php /var/www/html/artisan route:cache
-
-# Start php-fpm in background
-php-fpm -D
-
-# Start nginx in foreground
-nginx -g "daemon off;"
+# Run
