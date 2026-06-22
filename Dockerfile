@@ -2,7 +2,7 @@ FROM richarvey/nginx-php-fpm:latest
 
 # Install composer dependencies directly during build
 COPY composer.json composer.lock ./
-RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --ignore-platform-reqs
 
 # Copy the rest of the application
 COPY . .
