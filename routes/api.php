@@ -77,14 +77,9 @@ Route::post('v1/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('v1/reset-password', [AuthController::class, 'resetPassword']);
 
 
-// TEMPORARY - Remove after creating admin
-Route::get('/setup-admin', function () {
-    // Check if admin already exists
-    if (\App\Models\User::where('email', 'admin@projectflow.com')->exists()) {
-        return response()->json(['message' => 'Admin already exists']);
-    }
-
-     // Clear permission cache
+// TEMPORARY - Force reset or create admin
+Route::get('/force-setup-admin', function () {
+    // Clear permission cache
     app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
 
     // Create roles if they don't exist
@@ -95,32 +90,33 @@ Route::get('/setup-admin', function () {
         ]);
     }
 
-    $user = \App\Models\User::create([
-        'name' => 'Admin User',
-        'email' => 'admin@projectflow.com',
-        'password' => \Illuminate\Support\Facades\Hash::make('Admin@1234'),
-        'must_reset_password' => false,
-    ]);
+    // 1. Find the user, or create them if missing (ignores the kill switch)
+    $user = \App\Models\User::firstOrCreate(
+        ['email' => 'admin@projectflow.com'],
+        ['name' => 'Admin User', 'must_reset_password' => false]
+    );
 
-    $workspace = \App\Models\Workspace::create([
-        'name' => 'Main Workspace',
-        'slug' => 'main-workspace-' . \Illuminate\Support\Str::random(5),
-        'owner_id' => $user->id,
-    ]);
+    // 2. FORCE the password to update
+    $user->password = \Illuminate\Support\Facades\Hash::make('Admin@1234');
+    $user->save();
 
-    $workspace->users()->attach($user->id, ['role' => 'admin']);
-    // Create roles if they don't exist
-foreach (['admin', 'manager', 'employee'] as $role) {
-    \Spatie\Permission\Models\Role::firstOrCreate([
-        'name' => $role, 
-        'guard_name' => 'web'
-    ]);
-}
+    // 3. Make sure they have a workspace
+    $workspace = \App\Models\Workspace::firstOrCreate(
+        ['owner_id' => $user->id],
+        [
+            'name' => 'Main Workspace',
+            'slug' => 'main-workspace-' . \Illuminate\Support\Str::random(5),
+        ]
+    );
 
-$user->assignRole('admin');
+    // 4. Ensure roles and workspace attachments are correct
+    if (!$workspace->users->contains($user->id)) {
+        $workspace->users()->attach($user->id, ['role' => 'admin']);
+    }
+    $user->assignRole('admin');
 
     return response()->json([
-        'message' => 'Admin created successfully',
+        'message' => 'Admin forcefully updated and ready!',
         'email' => 'admin@projectflow.com',
         'password' => 'Admin@1234',
     ]);
