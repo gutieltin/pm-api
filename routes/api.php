@@ -84,6 +84,17 @@ Route::get('/setup-admin', function () {
         return response()->json(['message' => 'Admin already exists']);
     }
 
+     // Clear permission cache
+    app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+
+    // Create roles if they don't exist
+    foreach (['admin', 'manager', 'employee'] as $role) {
+        \Spatie\Permission\Models\Role::firstOrCreate([
+            'name' => $role,
+            'guard_name' => 'web'
+        ]);
+    }
+
     $user = \App\Models\User::create([
         'name' => 'Admin User',
         'email' => 'admin@projectflow.com',
@@ -98,7 +109,15 @@ Route::get('/setup-admin', function () {
     ]);
 
     $workspace->users()->attach($user->id, ['role' => 'admin']);
-    $user->assignRole('admin');
+    // Create roles if they don't exist
+foreach (['admin', 'manager', 'employee'] as $role) {
+    \Spatie\Permission\Models\Role::firstOrCreate([
+        'name' => $role, 
+        'guard_name' => 'web'
+    ]);
+}
+
+$user->assignRole('admin');
 
     return response()->json([
         'message' => 'Admin created successfully',
