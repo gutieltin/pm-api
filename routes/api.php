@@ -77,47 +77,32 @@ Route::post('v1/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('v1/reset-password', [AuthController::class, 'resetPassword']);
 
 
-// TEMPORARY - Force reset or create admin
-Route::get('/force-setup-admin', function () {
-    // Clear permission cache
-    app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
-
-    // Create roles if they don't exist
-    foreach (['admin', 'manager', 'employee'] as $role) {
-        \Spatie\Permission\Models\Role::firstOrCreate([
-            'name' => $role,
-            'guard_name' => 'web'
-        ]);
+// TEMPORARY - Force upgrade existing user to Admin
+Route::get('/upgrade-to-admin', function () {
+    $user = \App\Models\User::where('email', 'admin@projectflow.com')->first();
+    
+    if (!$user) {
+        return response()->json(['message' => 'User not found!']);
     }
 
-    // 1. Find the user, or create them if missing (ignores the kill switch)
-    $user = \App\Models\User::firstOrCreate(
-        ['email' => 'admin@projectflow.com'],
-        ['name' => 'Admin User', 'must_reset_password' => false]
-    );
+    // 1. Force the global Spatie permission role
+    $user->syncRoles(['admin']);
 
-    // 2. FORCE the password to update
-    $user->password = \Illuminate\Support\Facades\Hash::make('Admin@1234');
-    $user->save();
-
-    // 3. Make sure they have a workspace
-    $workspace = \App\Models\Workspace::firstOrCreate(
-        ['owner_id' => $user->id],
-        [
-            'name' => 'Main Workspace',
-            'slug' => 'main-workspace-' . \Illuminate\Support\Str::random(5),
-        ]
-    );
-
-    // 4. Ensure roles and workspace attachments are correct
-    if (!$workspace->users->contains($user->id)) {
-        $workspace->users()->attach($user->id, ['role' => 'admin']);
+    // 2. Find their workspace and force the pivot table role
+    $workspace = \App\Models\Workspace::where('owner_id', $user->id)->first();
+    
+    if ($workspace) {
+        if ($workspace->users->contains($user->id)) {
+            // Update the existing connection
+            $workspace->users()->updateExistingPivot($user->id, ['role' => 'admin']);
+        } else {
+            // Create the connection if it somehow doesn't exist
+            $workspace->users()->attach($user->id, ['role' => 'admin']);
+        }
     }
-    $user->assignRole('admin');
 
     return response()->json([
-        'message' => 'Admin forcefully updated and ready!',
-        'email' => 'admin@projectflow.com',
-        'password' => 'Admin@1234',
+        'message' => 'Success! You are now a full Admin.',
+        'email' => $user->email
     ]);
 });
