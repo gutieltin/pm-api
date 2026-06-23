@@ -75,3 +75,34 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->prefix('v1')->group(functio
 });
 Route::post('v1/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('v1/reset-password', [AuthController::class, 'resetPassword']);
+
+
+// TEMPORARY - Remove after creating admin
+Route::get('/setup-admin', function () {
+    // Check if admin already exists
+    if (\App\Models\User::where('email', 'admin@projectflow.com')->exists()) {
+        return response()->json(['message' => 'Admin already exists']);
+    }
+
+    $user = \App\Models\User::create([
+        'name' => 'Admin User',
+        'email' => 'admin@projectflow.com',
+        'password' => \Illuminate\Support\Facades\Hash::make('Admin@1234'),
+        'must_reset_password' => false,
+    ]);
+
+    $workspace = \App\Models\Workspace::create([
+        'name' => 'Main Workspace',
+        'slug' => 'main-workspace-' . \Illuminate\Support\Str::random(5),
+        'owner_id' => $user->id,
+    ]);
+
+    $workspace->users()->attach($user->id, ['role' => 'admin']);
+    $user->assignRole('admin');
+
+    return response()->json([
+        'message' => 'Admin created successfully',
+        'email' => 'admin@projectflow.com',
+        'password' => 'Admin@1234',
+    ]);
+});
