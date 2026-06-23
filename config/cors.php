@@ -3,9 +3,9 @@
 return [
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
     'allowed_methods' => ['*'],
-    'allowed_origins' => [
+'allowed_origins' => [
     env('FRONTEND_URL', 'http://localhost:3000'),
-    'https://projectflow-cj9j1qnlg-lampteyelton-8503s-projects.vercel.app'
+    'https://projectflow-gamma.vercel.app'
 ],
     'allowed_origins_patterns' => [],
     'allowed_headers' => ['*'],
